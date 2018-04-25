@@ -1,297 +1,219 @@
-'''
-
-IDB Auto Markup
-
-- Purpose: This script marks up an IDA Pro IDB with comments that are helpful for malware reverse engineers
-
-- To run, open a malware in IDA Pro, then select 'File' -> 'ScriptFile' -> <this script>.
-
-- Current features:
-[1] Highlight noteworthy operations, such as calls and non-zeroing XOR operations.
-[2] Auto identify the top-ten most referenced user code functions
- and comment them accordingly. This is a helpful way to (sometimes) quickly find obfuscation functions.
-[3] Auto identify all noteworthy imported functions and trace their usage throughout the
-malware. This is a helpful way to (sometimes) quickly quickly identify key execution paths. 
-
-TODO:
-- Support 64-bit malware (currently untested)
-- Verify that I'm identifying user-code functions correctly
-- Auto-identify non-zero XOR operations occurring in the context of
-a loop (e.g. possibly obfuscation)
-- Auto-identify PDB strings
-- Auto-identify stack strings (use an existing tool for this?)
-- Auto-identify compile time
-- Auto-identify calls to registers such as 'call eax'
-- Auto-identify the top-10 longest user code functions
-
-'''
+# IDB Markup Script
+# Purpose: markup an IDB with some helpful comments to speed up RE time.
+# To run, open a malware in IDA Pro, then select 'File' -> 'ScriptFile' -> <this script>.
 
 from collections import OrderedDict
 from itertools import islice
 import idaapi
 
 
-class functionCommenting(object):
-    '''
-	Add comments to functions. 
-	It is much easier to do all commenting at one time, rather than ad-hoc. Hence, this class handles that.
-	'''
+class FunctionCommenter(object):
 
     def __init__(self):
-        self.masterCmtDict = {}
+        self.master_commenting_dict = {}
 
-    def addCmt(self, fxAddy, cmntString):
+    def add_function_comment_to_queue(self, function_address, comment_string):
 
-        if fxAddy in self.masterCmtDict.keys():
-			self.masterCmtDict.()
-            existingCmt = self.masterCmtDict[fxAddy]
-            # print 'existingCmt is %s' % existingCmt
-            newCmt = str(existingCmt) + '\n' + str(cmntString)
-            self.masterCmtDict[fxAddy] = newCmt
+        if function_address in self.master_commenting_dict.keys():
+            existing_comment = self.master_commenting_dict[function_address]
+            new_comment = str(existing_comment) + '\n' + str(comment_string)
+            self.master_commenting_dict[function_address] = new_comment
         else:
-            self.masterCmtDict[fxAddy] = cmntString  # Might want to do this as a list
+            self.master_commenting_dict[function_address] = comment_string
 
         return
 
-    def commitAllCmts(self):
+    def commit_all_comments_to_idb(self):
 
-        for addy, cmt in self.masterCmtDict.items():
+        for address, comment in self.master_commenting_dict.items():
 
-            fxFlags = GetFunctionFlags(addy)
-            if fxFlags & FUNC_LIB:
+            function_flags = GetFunctionFlags(address)
+            if function_flags & FUNC_LIB:
                 continue
             else:
-                SetFunctionCmt(addy, cmt, 1)
+                SetFunctionCmt(address, comment, 1)
 
         return
 
 
-def countAndSumXrefsToFunctions(ea):
-    '''
-	This function calculates the number of xrefs for each function and the most-xref'd functions
-	in the entire program and comments the IDB accordingly.
-	'''
-    totalNumOfFx = 0
-    fxDict = {}
+def count_and_sum_xrefs_to_functions(ea):
+    total_number_of_functions = 0
+    function_dict = {}
+    user_code_functions = []
 
-    ## Get list of user-code functions
-    userCodeFunctions = []
-    for functionAddy in Functions(SegStart(ea), SegEnd(ea)):
-        # print 'Checking fx %s' % hex(int(functionAddy))
-        fxFlags = GetFunctionFlags(functionAddy)
-        if fxFlags & FUNC_LIB or fxFlags & FUNC_STATIC:
-            # print 'Fx %s is not user code, skipping' % hex(int(functionAddy))
+    for function_address in Functions(SegStart(ea), SegEnd(ea)):
+        function_flags = GetFunctionFlags(function_address)
+        if function_flags & FUNC_LIB or function_flags & FUNC_STATIC:
             continue
         else:
-            userCodeFunctions.append(functionAddy)
+            user_code_functions.append(function_address)
 
-    ## Create xref count comments for user-code functions
-    for usercodeFx in userCodeFunctions:
-        xrefGenerator = XrefsTo(usercodeFx)
-        totalCrossReferences = sum(1 for fx in xrefGenerator)
-        commentor.addCmt(usercodeFx, 'Fx Xrefs: %s' % totalCrossReferences)
-        fxDict[usercodeFx] = totalCrossReferences
-        totalNumOfFx += 1
-    print '\n\nTotal number of user-code functions identified: %s (approx) ' % totalNumOfFx
+    for user_code_function in user_code_functions:
+        xref_generator = XrefsTo(user_code_function)
+        count_of_xrefs = sum(1 for function_generated in xref_generator)
+        commenter.add_function_comment_to_queue(user_code_function, 'Fx Xrefs: %s' % count_of_xrefs)
+        function_dict[user_code_function] = count_of_xrefs
+        total_number_of_functions += 1
 
-    ## Create top-ten xref'd functions comments
-    fxXrefsSorted = OrderedDict(sorted(fxDict.items(), key=lambda t: t[1], reverse=True))
+    print('\n\nTotal number of user-code functions identified: %s (approx) ' % total_number_of_functions)
 
-    print '\n\nTop ten most xref\'d user-code functions:\n'
-    xList = fxXrefsSorted.items()
-    control = 0
+    sorted_function_xrefs = OrderedDict(sorted(function_dict.items(), key=lambda t: t[1], reverse=True))
+
+    print('\n\nTop ten most xref\'d user-code functions:\n')
+    sorted_function_xrefs_tuples = sorted_function_xrefs.items()
+    count = 0
     score = 1
-    while control <= len(xList):
-        fFlags = GetFunctionFlags(xList[control][0])
-        if not fFlags & FUNC_THUNK:
-            print hex(int(xList[control][0])), '->', int(xList[control][1])
-            commentor.addCmt(xList[control][0], 'This is the #%s most-referenced user-code function' % score)
+
+    while count <= len(sorted_function_xrefs_tuples):
+        function_flags = GetFunctionFlags(sorted_function_xrefs_tuples[count][0])
+        if not function_flags & FUNC_THUNK:
+            print("%s -> %s" % (str(hex(int(sorted_function_xrefs_tuples[count][0]))).strip("L"), str(int(sorted_function_xrefs_tuples[count][1]))))
+            commenter.add_function_comment_to_queue(sorted_function_xrefs_tuples[count][0], 'This is the #%s most-referenced user-code function' % score)
             score += 1
-        control += 1
+        count += 1
         if score == 10:
             break
 
+    return
 
-def highlightInstructions(MnemToHighlight, Color):
-    '''
-	Highlight specific noteworthy instructions.
-	TODO: add more, such as pusha, etc
-	'''
+def highlight_instructions_of_interest(mnem_to_highlight, color):
+    # TODO: add more, such as pusha, etc
 
-    for seg in Segments():
-        for head in Heads(seg, SegEnd(seg)):
-            if GetMnem(head) == MnemToHighlight:
-                if MnemToHighlight == 'call':
-                    SetColor(head, CIC_ITEM, Color)
-                elif MnemToHighlight == 'xor':
+    for segment in Segments():
+        for head in Heads(segment, SegEnd(segment)):
+            if GetMnem(head) == mnem_to_highlight:
+                if mnem_to_highlight == 'call':
+                    SetColor(head, CIC_ITEM, color)
+                elif mnem_to_highlight == 'xor':
                     if GetOpnd(head, 0) != GetOpnd(head, 1):
-                        SetColor(head, CIC_ITEM, Color)
-                        print 'Non-zero XOR @ %s: %s %s' % (hex(int(head)), GetOpnd(head, 0), GetOpnd(head, 1))
+                        SetColor(head, CIC_ITEM, color)
+                        print('Non-zero XOR @ %s: %s %s' % (str(hex(int(head))).strip("L"), GetOpnd(head, 0), GetOpnd(head, 1)))
+
+    return
 
 
 class ImportMarkup(object):
-    noteworthyImports = list((x.lower() for x in
-                              ['accept', 'bind', 'CompareString', 'connect', 'CreateFile', 'CreateMutex', 'CreatePipe',
-                               'CreateProcess', 'CreateRemoteThread', 'CreateService', 'CreateToolhelp32Snapshot',
-                               'CryptAcquireContext', 'DeviceIoControl', 'EnumProcesses', 'EnumProcessModules',
-                               'FindResource', 'GeAsyncKeyState', 'GetAdaptersInfo', 'GetFileSize', 'gethostbyname',
-                               'gethostname', 'GetProcAddress', 'GetTempPath', 'GetTickCount', 'inet_addr',
-                               'InternetOpenUrl', 'InternetReadFile', 'InternetWriteFile', 'IsDebuggerPresent',
-                               'LoadLibrary', 'NetShareEnum', 'NtQueryInformationProcess', 'OleInitialize',
-                               'PeekNamedPipe', 'QueryPerformanceCounter', 'QueueUserAPC', 'ReadFile',
-                               'ReadProcessMemory', 'recv', 'ResumeThread', 'RtlCreateRegistryKey',
-                               'RtlWriteRegistryValue', 'send', 'SetFilePointer', 'SetFileTime', 'SetWindowsHookEx',
-                               'ShellExecute', 'sleep', 'URLDownloadToFile', 'WinExec', 'WriteFile',
-                               'WriteProcessMemory', 'WSAStartup']))
 
     def __init__(self):
-        self.importDict = {}
+        self.dict_of_imports = {}
+        self.mapping_of_functions_to_noteworthy_apis = {}
+        self.noteworthy_imports = ['accept', 'bind', 'CompareString', 'connect', 'CreateFile', 'CreateMutex', 'CreatePipe', 'CreateProcess', 'CreateRemoteThread', 'CreateService', 'CreateToolhelp32Snapshot', 'CryptAcquireContext', 'DeviceIoControl', 'EnumProcesses', 'EnumProcessModules', 'FindResource', 'GeAsyncKeyState', 'GetAdaptersInfo', 'GetFileSize', 'gethostbyname', 'gethostname', 'GetProcAddress', 'GetTempPath', 'GetTickCount', 'inet_addr', 'InternetOpenUrl', 'InternetReadFile', 'InternetWriteFile', 'IsDebuggerPresent', 'LoadLibrary', 'NetShareEnum', 'NtQueryInformationProcess', 'OleInitialize', 'PeekNamedPipe', 'QueryPerformanceCounter', 'QueueUserAPC', 'ReadFile', 'ReadProcessMemory', 'recv', 'ResumeThread', 'RtlCreateRegistryKey', 'RtlWriteRegistryValue', 'send', 'SetFilePointer', 'SetFileTime', 'SetWindowsHookEx', 'ShellExecute', 'sleep', 'URLDownloadToFile', 'WinExec', 'WriteFile', 'WriteProcessMemory', 'WSAStartup']
 
-    def importsCallback(self, ea, name, ord):
-        '''
-		Note: this fx is courtesy of hexrays
-		'''
+    def imports_callback(self, ea, name, ord):
+        # Note: this fx is courtesy of hexrays
         if not name:
-            # print "%08x: ord#%d" % (ea, ord)
-            self.importDict[ea] = 'UNK_NAME?'
+            self.dict_of_imports[ea] = 'UNK_NAME?'
         else:
-            # print "%08x: %s (ord#%d)" % (ea, name, ord)
-            self.importDict[ea] = name
-        # True -> Continue enumeration
-        # False -> Stop enumeration
+            self.dict_of_imports[ea] = name
+
         return True
 
-    def getImports(self):
-        '''
-		Get all imports
-		Note: this fx is courtesy of hexrays
-		'''
-
-        nimps = idaapi.get_import_module_qty()
-
-        # print "Found %d import(s)..." % nimps
-
-        for i in xrange(0, nimps):
+    def get_all_imports(self):
+        # Note: this fx is courtesy of hexrays
+        number_of_imports = idaapi.get_import_module_qty()
+        for i in xrange(0, number_of_imports):
             name = idaapi.get_import_module_name(i)
             if not name:
-                print "Failed to get import module name for #%d" % i
+                print("Failed to get import module name for #%d" % i)
                 continue
 
-            # print "Walking-> %s" % name
-            idaapi.enum_import_names(i, self.importsCallback)
+            idaapi.enum_import_names(i, self.imports_callback)
 
-    def traceNoteworthyImports(self):
-        '''
-		Identify all functions in the program which reference noteworthy imported functions either directly, or via sub-functions. 
-		'''
-        noteworthyFxsInFile = {}
-        self.functionToNoteworthyAPIMappingDict = {}
+        return
 
-        ## Get dict of noteworthy functions in the file
-        for importedFx in self.importDict.items():
-            for fx in self.noteworthyImports:
-                if fx in importedFx[1].lower():
-                    noteworthyFxsInFile[importedFx[0]] = importedFx[1]
+    def trace_direct_or_indirect_references_to_noteworthy_imports(self):
+        noteworthy_fxs_in_file = {}
+        for imported_function_address, imported_function_name in self.dict_of_imports.items():
+            for noteworthy_import in self.noteworthy_imports:
+                if noteworthy_import.lower() in imported_function_name.lower():
+                    noteworthy_fxs_in_file[imported_function_address] = imported_function_name
 
-        ## For each noteworthy function, trace its xrefs and build a new dict accordingly.
-        ## End goal, a dict like this: {4201616:['Sleep','CreateMutex'],etc}
+        # End goal, a dict with entries which look like this: {4201616:['Sleep','CreateMutex']}
 
-        print '\n\nResults of attempting to trace usage of noteworthy imported APIs by user-code functions.\n'
-        for noteworthyFx in noteworthyFxsInFile.items():
-            listOfTracedXrefsToNoteworthyFx = self.xrefGraphTraversal(noteworthyFx[0])
-            if listOfTracedXrefsToNoteworthyFx:
-                print '\n%s - Traced %s user-code xref\'s: %s' % (noteworthyFx[1], len(listOfTracedXrefsToNoteworthyFx),
-                                                                  (", ".join([hex(int(z)) for z in
-                                                                              listOfTracedXrefsToNoteworthyFx])))
-                # print 'Traced %s user-code Xref\'s to imported fx @ %s: %s' % (len(listOfTracedXrefsToNoteworthyFx),noteworthyFx[1],(", ".join([hex(int(z)) for z in listOfTracedXrefsToNoteworthyFx])))
-                for tracedXref in listOfTracedXrefsToNoteworthyFx:
-                    if tracedXref not in self.functionToNoteworthyAPIMappingDict.keys():
-                        self.functionToNoteworthyAPIMappingDict[tracedXref] = [noteworthyFx[1]]
-                    elif tracedXref in self.functionToNoteworthyAPIMappingDict.keys():
-                        if noteworthyFx[1] not in self.functionToNoteworthyAPIMappingDict[tracedXref]:
-                            self.functionToNoteworthyAPIMappingDict[tracedXref].append(noteworthyFx[1])
-                        # elif noteworthyFx[1] in self.functionToNoteworthyAPIMappingDict[tracedXref]:
-                        #	print 'No action, its already there'
+        print('\n\nResults of attempting to trace usage of noteworthy imported APIs by user-code functions:\n')
+
+        for noteworthy_function_address, noteworthy_function_name in noteworthy_fxs_in_file.items():
+            list_of_traced_xrefs_to_noteworthy_fx = self.trace_all_xrefs_to_function(noteworthy_function_address)
+            if list_of_traced_xrefs_to_noteworthy_fx:
+                print('\n%s - Traced %s user-code xref\'s: %s' % (noteworthy_function_name, len(list_of_traced_xrefs_to_noteworthy_fx), (", ".join([str(hex(int(z))).strip("L") for z in list_of_traced_xrefs_to_noteworthy_fx]))))
+                for traced_xref in list_of_traced_xrefs_to_noteworthy_fx:
+                    if traced_xref not in self.mapping_of_functions_to_noteworthy_apis.keys():
+                        self.mapping_of_functions_to_noteworthy_apis[traced_xref] = [noteworthy_function_name]
+                    elif traced_xref in self.mapping_of_functions_to_noteworthy_apis.keys():
+                        if noteworthy_function_name not in self.mapping_of_functions_to_noteworthy_apis[traced_xref]:
+                            self.mapping_of_functions_to_noteworthy_apis[traced_xref].append(noteworthy_function_name)
             else:
-                print 'Traced 0 user-code Xref\'s to imported fx @ %s. Possibly using non-standard wrapper?' % \
-                      noteworthyFx[1]
+                print('\nTraced 0 user-code Xref\'s to imported fx %s. Malware is possibly obfu-ing its API usage?' % noteworthy_function_name)
 
-            # print 'Final: %s' % self.functionToNoteworthyAPIMappingDict
+        return
 
-    def xrefGraphTraversal(self, importAddy):
-        '''
-		Given a function, trace all xref's to it.
-		Return a list of traced xref's
-		'''
-        traceOfXrefsToFx = []
+    def trace_all_xrefs_to_function(self, address_to_trace):
+        trace_of_xrefs_to_fx = []
 
-        queueOfTracedFxsWithXrefsToImportedFx = self.xrefMe(importAddy)
-        while queueOfTracedFxsWithXrefsToImportedFx:
-            xrefedFx = queueOfTracedFxsWithXrefsToImportedFx.pop()
-            ## Check if we've seen it before
-            if xrefedFx not in traceOfXrefsToFx:
-                ## If we haven't seen it before, add it to the final list and enumerate its xrefs
-                traceOfXrefsToFx.append(xrefedFx)
-                queueOfTracedFxsWithXrefsToImportedFx.extend(self.xrefMe(xrefedFx))
+        queue_of_traced_fxs_with_xrefs_to_imported_fx = self.user_code_functions_containing_xrefs_to_address(address_to_trace)
+        while queue_of_traced_fxs_with_xrefs_to_imported_fx:
+            xrefed_fx = queue_of_traced_fxs_with_xrefs_to_imported_fx.pop()
+            if xrefed_fx not in trace_of_xrefs_to_fx:
+                trace_of_xrefs_to_fx.append(xrefed_fx)
+                queue_of_traced_fxs_with_xrefs_to_imported_fx.extend(self.user_code_functions_containing_xrefs_to_address(xrefed_fx))
 
-        return traceOfXrefsToFx
+        return trace_of_xrefs_to_fx
 
-    def xrefMe(self, addressToXref):
-        '''
-		Return a list of user-code functions containing xrefs to any given address
-		'''
-        listOfFxsContainingXrefsToAddress = []
+    @staticmethod
+    def user_code_functions_containing_xrefs_to_address(address):
+        list_of_fxs_containing_xrefs_to_address = []
 
-        for xref in XrefsTo(addressToXref, XREF_USER):
-            fxFlags = GetFunctionFlags(xref.frm)
-            if fxFlags & FUNC_LIB or fxFlags & FUNC_STATIC:
+        for xref in XrefsTo(address, XREF_USER):
+            fx_flags = GetFunctionFlags(xref.frm)
+            if fx_flags & FUNC_LIB or fx_flags & FUNC_STATIC:
                 continue
             else:
-                fxContainingXref = GetFunctionAttr(xref.frm, FUNCATTR_START)
-                listOfFxsContainingXrefsToAddress.append(fxContainingXref)
+                fx_containing_xref = GetFunctionAttr(xref.frm, FUNCATTR_START)
+                list_of_fxs_containing_xrefs_to_address.append(fx_containing_xref)
 
-        return listOfFxsContainingXrefsToAddress
+        return list_of_fxs_containing_xrefs_to_address
 
-    def chunkster(self, l, n):
-        """Yield successive n-sized chunks from l, courtesy of the internet"""
-        for i in range(0, len(l), n):
-            yield l[i:i + n]
+    @staticmethod
+    def chunkster(list_to_break_into_chunks, length_of_chunks):
+        # Yield successive n-sized chunks from a list (courtesy of the internet)
+        for i in range(0, len(list_to_break_into_chunks), length_of_chunks):
+            yield list_to_break_into_chunks[i:i + length_of_chunks]
 
-    def commentNoteworthyImports(self):
-        '''
-		Add a comment to every function stating which noteworthy functions it references directly or via sub-functions
-		'''
-        for address, APIList in self.functionToNoteworthyAPIMappingDict.items():
-            if len(APIList) > 7:
-                commentor.addCmt(address, 'Noteworthy referenced APIs:')
-                chunkedListOfAPIs = list(self.chunkster(APIList, 7))
-                for chunk in chunkedListOfAPIs:
-                    commentor.addCmt(address, chunk)
+        return
+
+    def comment_functions_with_noteworthy_referenced_imports(self):
+        for address, api_list in self.mapping_of_functions_to_noteworthy_apis.items():
+            if len(api_list) > 7:
+                commenter.add_function_comment_to_queue(address, 'Noteworthy referenced APIs:')
+                chunked_list_of_apis = list(self.chunkster(api_list, length_of_chunks=7))
+                for chunk in chunked_list_of_apis:
+                    commenter.add_function_comment_to_queue(address, chunk)
             else:
-                commentor.addCmt(address, 'Noteworthy referenced APIs:\n%s' % APIList)
+                commenter.add_function_comment_to_queue(address, 'Noteworthy referenced APIs:\n%s' % api_list)
 
+        return
 
-## Get started
-print '\n\n**** Starting IDB Markup! ****\n\n'
+# Get started
+print('\n\n**** Starting IDB Markup! ****\n\n')
 
-## Highlight instructions I care about
-highlightInstructions('call', 0xffffd0)
-highlightInstructions('xor', 0xc7c7ff)
+# Highlight instructions I care about
+highlight_instructions_of_interest('call', 0xffffd0)
+highlight_instructions_of_interest('xor', 0xc7c7ff)
 
-## Instantiate the commentor class
-commentor = functionCommenting()
+# Instantiate the commenter class
+commenter = FunctionCommenter()
 
-## Count and Sum Xrefs to all user-code functions
-countAndSumXrefsToFunctions(ScreenEA())
+# Count and Sum Xrefs to all user-code functions
+count_and_sum_xrefs_to_functions(ScreenEA())
 
-## Add comments to every user-code function regarding which noteworthy imported function it calls directly or via sub-functions
+# Add comments to user-code functions regarding the noteworthy imported functions it calls directly or via sub-functions
 importProcessor = ImportMarkup()
-importProcessor.getImports()
-importProcessor.traceNoteworthyImports()
-importProcessor.commentNoteworthyImports()
+importProcessor.get_all_imports()
+importProcessor.trace_direct_or_indirect_references_to_noteworthy_imports()
+importProcessor.comment_functions_with_noteworthy_referenced_imports()
 
-## Markup the function's
-commentor.commitAllCmts()
+# Markup the functions
+commenter.commit_all_comments_to_idb()
 
-## The end!
-print '\n\n**** IDB Markup Complete! ****\n\n'
+# The end!
+print('\n\n**** IDB Markup Complete! ****\n\n')
